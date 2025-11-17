@@ -212,46 +212,49 @@ def leer_archivo(file):
 #     NORMALIZACIÓN AUTOMÁTICA (Min-Max o Z-Score según datos)
 # =============================================================
 
-def normalizacion_automatica(df):
-    df_norm = df.copy()
+def normalizaciones_generales(df):
 
-    numeric_cols = df_norm.select_dtypes(include=["float", "int"]).columns
+    df = df.copy()
+
+    # Detectar columnas numéricas
+    numeric_cols = df.select_dtypes(include=["float", "int"]).columns
+
+    if len(numeric_cols) == 0:
+        return df  # si no hay nada que normalizar
 
     for col in numeric_cols:
 
-        col_data = df_norm[col].dropna()
+        col_data = df[col].dropna()
 
         if len(col_data) < 2:
             continue
 
-        rango = col_data.max() - col_data.min()
-        std = col_data.std()
+        min_val = col_data.min()
+        max_val = col_data.max()
+        mean_val = col_data.mean()
+        std_val = col_data.std()
 
-        usar_zscore = False
+        # 1. Min-Max
+        df[f"{col}_MinMax"] = (df[col] - min_val) / (max_val - min_val) if max_val != min_val else 0
 
-        # Criterios para usar Z-SCORE
-        if rango > 100:
-            usar_zscore = True
-        if std > (0.3 * col_data.mean()):
-            usar_zscore = True
-        if col_data.quantile(0.95) > (col_data.mean() + 2 * std):
-            usar_zscore = True
+        # 2. Z-Score
+        df[f"{col}_ZScore"] = (df[col] - mean_val) / std_val if std_val != 0 else 0
 
-        if usar_zscore:
-            # -------- Z-SCORE --------
-            media = col_data.mean()
-            desviacion = std if std != 0 else 1
-            df_norm[col] = (df_norm[col] - media) / desviacion
-        else:
-            # -------- MIN-MAX --------
-            minimo = col_data.min()
-            maximo = col_data.max()
-            if maximo == minimo:
-                df_norm[col] = 0
-            else:
-                df_norm[col] = (df_norm[col] - minimo) / (maximo - minimo)
+        # 3. Rango [-1, 1]
+        df[f"{col}_Rango"] = (
+            2 * ((df[col] - min_val) / (max_val - min_val)) - 1
+            if max_val != min_val else 0
+        )
 
-    return df_norm
+        # 4. Centrado
+        df[f"{col}_Centrado"] = df[col] - mean_val
+
+        # 5. Decimal Scaling
+        k = len(str(int(abs(max_val)))) if max_val != 0 else 1
+        df[f"{col}_DecimalScaling"] = df[col] / (10 ** k)
+
+    return df
+
 
 
 # =============================================================
@@ -280,8 +283,9 @@ def procesar():
         mensaje = "Imputación realizada correctamente."
 
     elif accion == "normalizacion":
-        df_resultado = normalizacion_automatica(df_original.copy())
-        mensaje = "Normalización automática aplicada (Min-Max o Z-Score según los datos)."
+        df_resultado = normalizaciones_generales(df_original.copy())
+        mensaje = "Normalización aplicada a todas las columnas numéricas."
+
 
 
     else:
