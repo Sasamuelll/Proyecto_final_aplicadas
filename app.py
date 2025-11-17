@@ -208,6 +208,51 @@ def leer_archivo(file):
 
     return None
 
+# =============================================================
+#     NORMALIZACIÓN AUTOMÁTICA (Min-Max o Z-Score según datos)
+# =============================================================
+
+def normalizacion_automatica(df):
+    df_norm = df.copy()
+
+    numeric_cols = df_norm.select_dtypes(include=["float", "int"]).columns
+
+    for col in numeric_cols:
+
+        col_data = df_norm[col].dropna()
+
+        if len(col_data) < 2:
+            continue
+
+        rango = col_data.max() - col_data.min()
+        std = col_data.std()
+
+        usar_zscore = False
+
+        # Criterios para usar Z-SCORE
+        if rango > 100:
+            usar_zscore = True
+        if std > (0.3 * col_data.mean()):
+            usar_zscore = True
+        if col_data.quantile(0.95) > (col_data.mean() + 2 * std):
+            usar_zscore = True
+
+        if usar_zscore:
+            # -------- Z-SCORE --------
+            media = col_data.mean()
+            desviacion = std if std != 0 else 1
+            df_norm[col] = (df_norm[col] - media) / desviacion
+        else:
+            # -------- MIN-MAX --------
+            minimo = col_data.min()
+            maximo = col_data.max()
+            if maximo == minimo:
+                df_norm[col] = 0
+            else:
+                df_norm[col] = (df_norm[col] - minimo) / (maximo - minimo)
+
+    return df_norm
+
 
 # =============================================================
 #                         RUTAS
@@ -219,26 +264,40 @@ def index():
 
 @app.route("/procesar", methods=["POST"])
 def procesar():
+
     file = request.files["archivo"]
+    accion = request.form["accion"]
     df_original = leer_archivo(file)
 
     if df_original is None:
         return render_template("resultados.html",
-                               mensaje="No se pudo leer el archivo",
-                               tabla_original="", tabla_imputada="",
-                               download_link=None)
+            mensaje="No se pudo leer el archivo",
+            tabla_original="", tabla_imputada="", download_link=None)
 
-    df_resultado = imputacion_inteligente(df_original.copy())
+    # SOLO UNA OPCIÓN
+    if accion == "imputacion":
+        df_resultado = imputacion_inteligente(df_original.copy())
+        mensaje = "Imputación realizada correctamente."
+
+    elif accion == "normalizacion":
+        df_resultado = normalizacion_automatica(df_original.copy())
+        mensaje = "Normalización automática aplicada (Min-Max o Z-Score según los datos)."
+
+
+    else:
+        mensaje = "Acción inválida."
+        df_resultado = df_original.copy()
+
     df_resultado.to_csv(TEMP_FILE, index=False)
 
     tabla_original = df_original.to_html(classes="table table-striped", index=False)
     tabla_imputada = df_resultado.to_html(classes="table table-striped", index=False)
 
     return render_template("resultados.html",
-                           mensaje="Imputación completada correctamente.",
-                           tabla_original=tabla_original,
-                           tabla_imputada=tabla_imputada,
-                           download_link="/descargar")
+        mensaje=mensaje,
+        tabla_original=tabla_original,
+        tabla_imputada=tabla_imputada,
+        download_link="/descargar")
 
 
 @app.route("/descargar")

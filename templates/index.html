@@ -42,12 +42,14 @@
 <div class="card">
     <h1>Imputación de Valores Faltantes</h1>
 
-    <form action="/procesar" method="post" enctype="multipart/form-data">
-        <label><b>Selecciona un archivo CSV o Excel:</b></label><br>
-        <input type="file" name="archivo" accept=".csv, .xlsx, .xls" required>
+    <label for="accion">Seleccione una operación:</label>
+    <select name="accion" class="form-control" required>
+        <option value="imputacion">Imputación de valores faltantes</option>
+        <option value="normalizacion">Normalización automática</option>
 
-        <button type="submit">Procesar archivo</button>
-    </form>
+    </select>
+
+
 </div>
 
 </body>
