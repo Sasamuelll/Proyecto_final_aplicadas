@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Proyecto Ciencia de Datos</title>
+</head>
+<body>
+    <h1>Proyecto Ciencia de Datos</h1>
+
+    <form action="/procesar" method="post" enctype="multipart/form-data">
+        <label>Archivo CSV:</label>
+        <input type="file" name="archivo" accept=".csv" required><br><br>
+
+        <label>Operación:</label>
+        <select name="opcion" required>
+            <option value="faltantes">Relleno de valores faltantes</option>
+            <option value="normalizacion">Normalización</option>
+            <option value="discretizacion">Discretización</option>
+            <option value="clasificacion">Clasificación</option>
+        </select>
+        <br><br>
+
+        <label>Columna objetivo (solo para clasificación):</label>
+        <input type="text" name="target" placeholder="nombre_columna">
+        <br><br>
+
+        <button type="submit">Procesar</button>
+    </form>
+</body>
+</html>
