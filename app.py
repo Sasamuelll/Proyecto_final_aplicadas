@@ -1,87 +1,250 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_file
 import pandas as pd
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import MinMaxScaler, KBinsDiscretizer
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
+import numpy as np
+from sklearn.cluster import KMeans
 
 app = Flask(__name__)
+TEMP_FILE = "resultado_imputado.csv"
 
+# =============================================================
+#                 LIMPIEZA GLOBAL INTELIGENTE
+# =============================================================
+def limpiar_global(df):
+
+    df = df.astype(str)
+
+    df = df.replace({
+        r"\u200b": "",
+        r"\ufeff": "",
+        r"\xa0": "",
+        r"\s+": " "
+    }, regex=True)
+
+    df = df.replace({
+        "?": np.nan,
+        " ?": np.nan,
+        "? ": np.nan,
+        "  ?": np.nan,
+        " ? ": np.nan,
+        "??": np.nan,
+        "???": np.nan
+    }, regex=False)
+
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.applymap(lambda x: x.replace(",", ".") if isinstance(x, str) else x)
+
+    return df
+
+
+# =============================================================
+#       DETECCIÓN AUTOMÁTICA REAL DE LA COLUMNA CLASE
+# =============================================================
+def detectar_columna_clase(df):
+
+    obj_cols = df.select_dtypes(include=["object"]).columns.tolist()
+
+    if len(obj_cols) == 0:
+        return None
+    if len(obj_cols) == 1:
+        return obj_cols[0]
+
+    cardinalidades = {col: df[col].nunique() for col in obj_cols}
+    clase_col = min(cardinalidades, key=cardinalidades.get)
+    return clase_col
+
+
+# =============================================================
+#           IMPUTACIÓN INTELIGENTE COMPLETA
+# =============================================================
+def imputacion_inteligente(df):
+
+    df = limpiar_global(df)
+
+    # Recuperar tipos numéricos reales
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="ignore")
+
+    numeric_cols = df.select_dtypes(include=["float", "int"]).columns.tolist()
+    clase_col = detectar_columna_clase(df)
+
+    df_final = df.copy()
+
+    # =============================================================
+    #    CASO 1 — NO HAY COLUMNA CLASE → IMPUTACIÓN GLOBAL
+    # =============================================================
+    if clase_col is None:
+
+        # Numéricas por media global
+        for col in numeric_cols:
+            df_final[col] = pd.to_numeric(df_final[col], errors="coerce")
+            media = df_final[col].mean()
+            df_final[col] = df_final[col].fillna(media)
+
+        # Categóricas por moda global
+        cat_cols = df_final.select_dtypes(include=["object"]).columns.tolist()
+        for col in cat_cols:
+            moda = df_final[col].dropna().mode()
+            if len(moda) > 0:
+                df_final[col] = df_final[col].fillna(moda[0])
+            else:
+                df_final[col] = df_final[col].fillna("IMPUTADO")
+
+        return df_final
+
+    # =============================================================
+    #    CASO 2 — SÍ HAY CLASE → IMPUTACIÓN POR CLASE
+    # =============================================================
+
+    cat_cols = [c for c in df.columns if c not in numeric_cols and c != clase_col]
+
+    usar_kmeans = True
+
+    # Evaluar si KMeans es válido
+    if len(numeric_cols) == 0:
+        usar_kmeans = False
+
+    for col in numeric_cols:
+        if df[col].count() < 4:
+            usar_kmeans = False
+
+    for clase in df[clase_col].dropna().unique():
+        for col in numeric_cols:
+            if df[df[clase_col] == clase][col].count() < 2:
+                usar_kmeans = False
+
+    if len(numeric_cols) == 1:
+        col = numeric_cols[0]
+        if df[col].var() < 1:
+            usar_kmeans = False
+
+    # =============================================================
+    #       IMPUTACIÓN NUMÉRICA
+    # =============================================================
+    if usar_kmeans:
+        for col in numeric_cols:
+
+            for clase_val in df_final[clase_col].dropna().unique():
+
+                grupo = df_final[df_final[clase_col] == clase_val].copy()
+                grupo[col] = pd.to_numeric(grupo[col], errors="coerce")
+
+                temp = grupo[col].fillna(grupo[col].median())
+
+                if len(temp) < 2:
+                    continue
+
+                kmeans = KMeans(n_clusters=2, random_state=42)
+                clusters = kmeans.fit_predict(temp.values.reshape(-1, 1))
+
+                grupo["cluster"] = clusters
+                centros = kmeans.cluster_centers_.flatten()
+
+                for idx in grupo.index:
+                    if pd.isna(df_final.loc[idx, col]):
+                        df_final.loc[idx, col] = centros[grupo.loc[idx, "cluster"]]
+
+    else:
+        # Media por clase
+        for col in numeric_cols:
+            medias = df_final.groupby(clase_col)[col].mean()
+            for clase_val, media_val in medias.items():
+                mask = (df_final[col].isna()) & (df_final[clase_col] == clase_val)
+                df_final.loc[mask, col] = media_val
+
+    # =============================================================
+    #       IMPUTACIÓN CATEGÓRICA POR MODA DE CLASE
+    # =============================================================
+    for col in cat_cols:
+        for clase_val in df_final[clase_col].dropna().unique():
+
+            valores = df_final[df_final[clase_col] == clase_val][col].dropna()
+
+            if len(valores) == 0:
+                continue
+
+            moda = valores.mode()[0]
+
+            mask = (df_final[col].isna()) & (df_final[clase_col] == clase_val)
+            df_final.loc[mask, col] = moda
+
+    # =============================================================
+    #      SI QUEDA ALGÚN NaN → IMPUTACIÓN GLOBAL EXTRA
+    # =============================================================
+
+    for col in numeric_cols:
+        df_final[col] = df_final[col].fillna(df_final[col].mean())
+
+    cat_cols_all = df_final.select_dtypes(include=["object"]).columns.tolist()
+    for col in cat_cols_all:
+        moda = df_final[col].dropna().mode()
+        if len(moda) > 0:
+            df_final[col] = df_final[col].fillna(moda[0])
+        else:
+            df_final[col] = df_final[col].fillna("IMPUTADO")
+
+    return df_final
+
+
+# =============================================================
+#                     LECTURA DE ARCHIVOS
+# =============================================================
+def leer_archivo(file):
+    try:
+        return pd.read_csv(file, sep=None, engine="python", decimal=",")
+    except:
+        pass
+
+    try:
+        file.seek(0)
+        return pd.read_csv(file, sep=";", decimal=",")
+    except:
+        pass
+
+    try:
+        file.seek(0)
+        return pd.read_excel(file)
+    except:
+        pass
+
+    return None
+
+
+# =============================================================
+#                         RUTAS
+# =============================================================
 @app.route("/")
 def index():
     return render_template("index.html")
 
+
 @app.route("/procesar", methods=["POST"])
 def procesar():
-    # 1. obtener archivo y opción
     file = request.files["archivo"]
-    opcion = request.form["opcion"]
-    target = request.form.get("target")  # opcional, para clasificación
+    df_original = leer_archivo(file)
 
-    # 2. leer CSV
-    df = pd.read_csv(file)
+    if df_original is None:
+        return render_template("resultados.html",
+                               mensaje="No se pudo leer el archivo",
+                               tabla_original="", tabla_imputada="",
+                               download_link=None)
 
-    resultado_texto = ""
-    df_resultado = df.copy()
+    df_resultado = imputacion_inteligente(df_original.copy())
+    df_resultado.to_csv(TEMP_FILE, index=False)
 
-    # 3. aplicar operación
-    if opcion == "faltantes":
-        # relleno con la media para numéricos y moda para categóricos
-        num_cols = df_resultado.select_dtypes(include="number").columns
-        cat_cols = df_resultado.select_dtypes(exclude="number").columns
+    tabla_original = df_original.to_html(classes="table table-striped", index=False)
+    tabla_imputada = df_resultado.to_html(classes="table table-striped", index=False)
 
-        if len(num_cols) > 0:
-            imp_num = SimpleImputer(strategy="mean")
-            df_resultado[num_cols] = imp_num.fit_transform(df_resultado[num_cols])
+    return render_template("resultados.html",
+                           mensaje="Imputación completada correctamente.",
+                           tabla_original=tabla_original,
+                           tabla_imputada=tabla_imputada,
+                           download_link="/descargar")
 
-        if len(cat_cols) > 0:
-            imp_cat = SimpleImputer(strategy="most_frequent")
-            df_resultado[cat_cols] = imp_cat.fit_transform(df_resultado[cat_cols])
 
-        resultado_texto = "Valores faltantes rellenados (media en numéricos, moda en categóricos)."
+@app.route("/descargar")
+def descargar():
+    return send_file(TEMP_FILE, as_attachment=True)
 
-    elif opcion == "normalizacion":
-        num_cols = df_resultado.select_dtypes(include="number").columns
-        scaler = MinMaxScaler()
-        df_resultado[num_cols] = scaler.fit_transform(df_resultado[num_cols])
-        resultado_texto = "Se aplicó normalización Min-Max a las columnas numéricas."
-
-    elif opcion == "discretizacion":
-        num_cols = df_resultado.select_dtypes(include="number").columns
-        if len(num_cols) > 0:
-            disc = KBinsDiscretizer(n_bins=4, encode="ordinal", strategy="quantile")
-            df_resultado[num_cols] = disc.fit_transform(df_resultado[num_cols])
-            resultado_texto = "Se discretizaron las columnas numéricas en 4 bins (cuantiles)."
-        else:
-            resultado_texto = "No hay columnas numéricas para discretizar."
-
-    elif opcion == "clasificacion":
-        if not target or target not in df_resultado.columns:
-            resultado_texto = "Debes indicar una columna objetivo válida."
-        else:
-            X = df_resultado.drop(columns=[target])
-            y = df_resultado[target]
-
-            # quitar columnas no numéricas automáticamente
-            X = pd.get_dummies(X)
-
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.3, random_state=42
-            )
-
-            modelo = DecisionTreeClassifier()
-            modelo.fit(X_train, y_train)
-            accuracy = modelo.score(X_test, y_test)
-            resultado_texto = f"Clasificación con árbol de decisión. Accuracy: {accuracy:.3f}"
-
-    # 4. mandar una muestra de los datos procesados a la plantilla
-    preview = df_resultado.head().to_html(classes="table table-striped", index=False)
-
-    return render_template(
-        "resultados.html",
-        mensaje=resultado_texto,
-        tabla_html=preview
-    )
 
 if __name__ == "__main__":
     app.run(debug=True)

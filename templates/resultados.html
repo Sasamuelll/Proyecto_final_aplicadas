@@ -1,17 +1,37 @@
 <!doctype html>
-<html>
+<html lang="es">
 <head>
     <meta charset="utf-8">
-    <title>Resultados</title>
+    <title>Resultados de Imputación</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f0f0f0; }
+        .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 0 10px #ccc; max-width: 1000px; margin: auto; }
+        table { width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }
+        table th, table td { border: 1px solid #ddd; padding: 8px; }
+        a.btn { margin-top: 20px; display: inline-block; padding: 10px 20px; background: #2196F3; color: white; border-radius: 6px; text-decoration: none; }
+        a.btn:hover { background: #1976D2; }
+        .volver { background: #4CAF50; }
+        h2 { margin-top: 30px; }
+    </style>
 </head>
 <body>
+
+<div class="card">
     <h1>Resultados</h1>
 
     <p>{{ mensaje }}</p>
 
-    <h2>Vista previa de los datos procesados</h2>
-    {{ tabla_html|safe }}
+    <h2>Tabla original</h2>
+    <div>{{ tabla_original|safe }}</div>
 
-    <a href="/">Volver</a>
+    <h2>Tabla imputada</h2>
+    <div>{{ tabla_imputada|safe }}</div>
+
+    <a href="/" class="btn volver">Volver</a>
+    {% if download_link %}
+        <a href="{{ download_link }}" class="btn">Descargar archivo imputado</a>
+    {% endif %}
+</div>
+
 </body>
 </html>
