@@ -3,42 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <title>Resultados</title>
-
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-
     <style>
-        body {
-            padding: 20px;
-            background: #f9f9f9;
-        }
-        .tabla-container {
-            overflow-x: auto;
-        }
-        .card {
-            margin-bottom: 30px;
-        }
+        body { padding: 20px; background: #f9f9f9; }
+        .tabla-container { overflow-x: auto; }
+        .card { margin-bottom: 30px; }
+        pre { background: #eee; padding: 10px; border-radius: 5px; }
     </style>
 </head>
-
 <body>
-
 <h2 class="mb-4">{{ mensaje }}</h2>
 
 <!-- Tabla original -->
 <div class="card p-3">
     <h4>Datos originales</h4>
-    <div class="tabla-container">
-        {{ tabla_original|safe }}
-    </div>
+    <div class="tabla-container">{{ tabla_original|safe }}</div>
 </div>
 
 <!-- Tabla procesada -->
 {% if tabla_imputada %}
 <div class="card p-3">
     <h4>Datos procesados</h4>
-    <div class="tabla-container">
-        {{ tabla_imputada|safe }}
-    </div>
+    <div class="tabla-container">{{ tabla_imputada|safe }}</div>
+</div>
+{% endif %}
+
+<!-- Árbol de decisión -->
+{% if arbol_info %}
+<div class="card p-3">
+    <h4>Reporte de Árbol de Decisión</h4>
+    <pre>{{ arbol_info.report }}</pre>
+    <h4>Reglas del Árbol</h4>
+    <pre>{{ arbol_info.rules }}</pre>
 </div>
 {% endif %}
 
