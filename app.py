@@ -6,14 +6,26 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier, export_text
 from sklearn.metrics import accuracy_score, classification_report
+import os
 
 app = Flask(__name__)
 TEMP_FILE = "resultado_procesado.csv"
+ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
+# =============================================================
+# VALIDACIÓN DE EXTENSIONES
+# =============================================================
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # =============================================================
 # LIMPIEZA GLOBAL INTELIGENTE
 # =============================================================
 def limpiar_global(df):
+    if df is None or df.empty:
+        return df
+    
     df = df.astype(str)
     df = df.replace({
         r"\u200b": "", r"\ufeff": "", r"\xa0": "", r"\s+": " "
@@ -30,6 +42,9 @@ def limpiar_global(df):
 # DETECCIÓN AUTOMÁTICA DE LA COLUMNA CLASE
 # =============================================================
 def detectar_columna_clase(df):
+    if df is None or df.empty:
+        return None
+    
     obj_cols = df.select_dtypes(include=["object"]).columns.tolist()
     if len(obj_cols) == 0:
         return None
@@ -43,6 +58,12 @@ def detectar_columna_clase(df):
 # IMPUTACIÓN INTELIGENTE
 # =============================================================
 def imputacion_inteligente(df):
+    if df is None or df.empty:
+        return df
+    
+    if df.shape[0] < 1:
+        return df
+    
     df = limpiar_global(df)
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="ignore")
@@ -54,7 +75,9 @@ def imputacion_inteligente(df):
     if clase_col is None:
         for col in numeric_cols:
             df_final[col] = pd.to_numeric(df_final[col], errors="coerce")
-            df_final[col] = df_final[col].fillna(df_final[col].mean())
+            media = df_final[col].mean()
+            if pd.notna(media):
+                df_final[col] = df_final[col].fillna(media)
         cat_cols = df_final.select_dtypes(include=["object"]).columns.tolist()
         for col in cat_cols:
             moda = df_final[col].dropna().mode()
@@ -88,19 +111,32 @@ def imputacion_inteligente(df):
                 temp = grupo[col].fillna(grupo[col].median())
                 if len(temp) < 2:
                     continue
-                kmeans = KMeans(n_clusters=2, random_state=42)
-                clusters = kmeans.fit_predict(temp.values.reshape(-1, 1))
-                grupo["cluster"] = clusters
-                centros = kmeans.cluster_centers_.flatten()
-                for idx in grupo.index:
-                    if pd.isna(df_final.loc[idx, col]):
-                        df_final.loc[idx, col] = centros[grupo.loc[idx, "cluster"]]
+                
+                # Validar que haya varianza
+                if len(temp.unique()) < 2:
+                    continue
+                
+                try:
+                    kmeans = KMeans(n_clusters=2, random_state=42)
+                    clusters = kmeans.fit_predict(temp.values.reshape(-1, 1))
+                    grupo["cluster"] = clusters
+                    centros = kmeans.cluster_centers_.flatten()
+                    for idx in grupo.index:
+                        if pd.isna(df_final.loc[idx, col]):
+                            df_final.loc[idx, col] = centros[grupo.loc[idx, "cluster"]]
+                except Exception:
+                    # Si KMeans falla, usar media simple
+                    for idx in grupo.index:
+                        if pd.isna(df_final.loc[idx, col]):
+                            df_final.loc[idx, col] = temp.mean()
+                    continue
     else:
         for col in numeric_cols:
             medias = df_final.groupby(clase_col)[col].mean()
             for clase_val, media_val in medias.items():
-                mask = (df_final[col].isna()) & (df_final[clase_col] == clase_val)
-                df_final.loc[mask, col] = media_val
+                if pd.notna(media_val):
+                    mask = (df_final[col].isna()) & (df_final[clase_col] == clase_val)
+                    df_final.loc[mask, col] = media_val
 
     # Imputación categórica por moda de clase
     for col in cat_cols:
@@ -114,7 +150,9 @@ def imputacion_inteligente(df):
 
     # Última imputación global
     for col in numeric_cols:
-        df_final[col] = df_final[col].fillna(df_final[col].mean())
+        media = df_final[col].mean()
+        if pd.notna(media):
+            df_final[col] = df_final[col].fillna(media)
     cat_cols_all = df_final.select_dtypes(include=["object"]).columns.tolist()
     for col in cat_cols_all:
         moda = df_final[col].dropna().mode()
@@ -126,49 +164,76 @@ def imputacion_inteligente(df):
 # NORMALIZACIÓN AUTOMÁTICA
 # =============================================================
 def normalizaciones_generales(df):
+    if df is None or df.empty:
+        return df
+    
     df = df.copy()
     numeric_cols = df.select_dtypes(include=["float", "int"]).columns
     if len(numeric_cols) == 0:
         return df
     for col in numeric_cols:
-        col_data = df[col].dropna()
-        if len(col_data) < 2:
+        try:
+            col_data = df[col].dropna()
+            if len(col_data) < 2:
+                continue
+            min_val = col_data.min()
+            max_val = col_data.max()
+            mean_val = col_data.mean()
+            std_val = col_data.std()
+            df[f"{col}_MinMax"] = (df[col] - min_val) / (max_val - min_val) if max_val != min_val else 0
+            df[f"{col}_ZScore"] = (df[col] - mean_val) / std_val if std_val != 0 else 0
+            df[f"{col}_Rango"] = 2 * ((df[col] - min_val) / (max_val - min_val)) - 1 if max_val != min_val else 0
+            df[f"{col}_Centrado"] = df[col] - mean_val
+            k = len(str(int(abs(max_val)))) if max_val != 0 else 1
+            df[f"{col}_DecimalScaling"] = df[col] / (10 ** k)
+        except Exception as e:
+            print(f"Error normalizando columna {col}: {e}")
             continue
-        min_val = col_data.min()
-        max_val = col_data.max()
-        mean_val = col_data.mean()
-        std_val = col_data.std()
-        df[f"{col}_MinMax"] = (df[col] - min_val) / (max_val - min_val) if max_val != min_val else 0
-        df[f"{col}_ZScore"] = (df[col] - mean_val) / std_val if std_val != 0 else 0
-        df[f"{col}_Rango"] = 2 * ((df[col] - min_val) / (max_val - min_val)) - 1 if max_val != min_val else 0
-        df[f"{col}_Centrado"] = df[col] - mean_val
-        k = len(str(int(abs(max_val)))) if max_val != 0 else 1
-        df[f"{col}_DecimalScaling"] = df[col] / (10 ** k)
     return df
 
 # =============================================================
 # DISCRETIZACIÓN
 # =============================================================
 def discretizacion(df, metodo="equal_width", bins=5):
+    if df is None or df.empty:
+        return df
+    
     df = df.copy()
     numeric_cols = df.select_dtypes(include=["float", "int"]).columns
     for col in numeric_cols:
-        col_data = df[col].dropna()
-        if len(col_data) < 2:
+        try:
+            col_data = df[col].dropna()
+            if len(col_data) < 2:
+                continue
+            if metodo == "equal_width":
+                df[f"{col}_discretizado"] = pd.cut(df[col], bins=bins, labels=False)
+            elif metodo == "equal_freq":
+                df[f"{col}_discretizado"] = pd.qcut(df[col], q=bins, labels=False, duplicates="drop")
+            else:
+                raise ValueError("Método inválido. Use 'equal_width' o 'equal_freq'.")
+        except Exception as e:
+            print(f"Error discretizando columna {col}: {e}")
             continue
-        if metodo == "equal_width":
-            df[f"{col}_discretizado"] = pd.cut(df[col], bins=bins, labels=False)
-        elif metodo == "equal_freq":
-            df[f"{col}_discretizado"] = pd.qcut(df[col], q=bins, labels=False, duplicates="drop")
-        else:
-            raise ValueError("Método inválido. Use 'equal_width' o 'equal_freq'.")
     return df
 
 # =============================================================
 # ARBOL DE DECISION GENERAL
 # =============================================================
 def arbol_decision_general(df):
+    if df is None or df.empty:
+        return df, 0, "No hay datos para entrenar", ""
+    
+    if df.shape[0] < 10:
+        return df, 0, "Datos insuficientes para entrenar el modelo (mínimo 10 filas)", ""
+    
+    if df.shape[1] < 2:
+        return df, 0, "Se necesitan al menos 2 columnas (features + objetivo)", ""
+    
     df = imputacion_inteligente(df.copy())
+    
+    if df.empty:
+        return df, 0, "Error en el procesamiento de datos", ""
+    
     # Codificar categóricas
     le_dict = {}
     for col in df.select_dtypes(include=["object"]).columns:
@@ -178,19 +243,37 @@ def arbol_decision_general(df):
     objetivo_col = df.columns[-1]
     X = df.drop(objetivo_col, axis=1)
     y = df[objetivo_col]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    clf = DecisionTreeClassifier(random_state=42, max_depth=5)
-    clf.fit(X_train, y_train)
-    y_pred = clf.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred)
-    tree_rules = export_text(clf, feature_names=list(X.columns))
-    return df, acc, report, tree_rules
+    
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        clf = DecisionTreeClassifier(random_state=42, max_depth=5)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+        report = classification_report(y_test, y_pred)
+        tree_rules = export_text(clf, feature_names=list(X.columns))
+        return df, acc, report, tree_rules
+    except Exception as e:
+        return df, 0, f"Error al entrenar el modelo: {str(e)}", ""
 
 # =============================================================
 # LECTURA DE ARCHIVOS
 # =============================================================
 def leer_archivo(file):
+    if file is None or file.filename == '':
+        return None
+    
+    # Validar tamaño del archivo
+    file.seek(0, 2)  # Ir al final
+    size = file.tell()
+    file.seek(0)  # Volver al inicio
+    
+    if size == 0:
+        return None
+    
+    if size > MAX_FILE_SIZE:
+        return None
+    
     try:
         return pd.read_csv(file, sep=None, engine="python", decimal=",")
     except:
@@ -216,16 +299,51 @@ def index():
 
 @app.route("/procesar", methods=["POST"])
 def procesar():
+    ACCIONES_VALIDAS = ['imputacion', 'normalizacion', 'discretizacion', 'arbol', 'todo']
+    
+    # Validar que el archivo existe
+    if 'archivo' not in request.files:
+        return render_template("resultados.html",
+                               mensaje="No se ha enviado ningún archivo",
+                               tabla_original="", tabla_imputada="", download_link=None)
+    
     file = request.files["archivo"]
-    accion = request.form["accion"]
+    
+    # Validar archivo vacío
+    if not file or file.filename == '':
+        return render_template("resultados.html",
+                               mensaje="No se ha seleccionado ningún archivo",
+                               tabla_original="", tabla_imputada="", download_link=None)
+    
+    # Validar extensión
+    if not allowed_file(file.filename):
+        return render_template("resultados.html",
+                               mensaje="Formato de archivo no válido. Use CSV o Excel (.xlsx, .xls)",
+                               tabla_original="", tabla_imputada="", download_link=None)
+    
+    # Validar acción
+    accion = request.form.get("accion", "")
+    if accion not in ACCIONES_VALIDAS:
+        return render_template("resultados.html",
+                               mensaje="Acción no válida",
+                               tabla_original="", tabla_imputada="", download_link=None)
 
     df_original = leer_archivo(file)
+    
+    # Validar lectura correcta
     if df_original is None:
         return render_template("resultados.html",
-                               mensaje="No se pudo leer el archivo",
+                               mensaje="No se pudo leer el archivo. Verifique que sea un CSV o Excel válido y que no exceda 50MB",
+                               tabla_original="", tabla_imputada="", download_link=None)
+    
+    # Validar que no esté vacío
+    if df_original.empty or df_original.shape[0] == 0 or df_original.shape[1] == 0:
+        return render_template("resultados.html",
+                               mensaje="El archivo no contiene datos válidos",
                                tabla_original="", tabla_imputada="", download_link=None)
 
     arbol_info = None
+    tablas_extra = None
 
     # ================================
     # PROCESAMIENTO COMPLETO "TODO"
@@ -279,14 +397,32 @@ def procesar():
     elif accion == "arbol":
         df_resultado, acc, report, tree_rules = arbol_decision_general(df_original.copy())
         mensaje = f"Árbol entrenado correctamente. Accuracy: {acc:.2f}"
-        arbol_info = {"report": report, "rules": tree_rules}
+        arbol_info = {"report": report, "rules": tree_rules, "accuracy": acc}
 
     else:
         df_resultado = df_original.copy()
         mensaje = "Acción inválida."
 
+    # Validar que el resultado no esté vacío
+    if df_resultado is None or df_resultado.empty:
+        return render_template("resultados.html",
+                               mensaje="Error: el procesamiento no generó resultados válidos",
+                               tabla_original=df_original.to_html(classes="table table-striped", index=False),
+                               tabla_imputada="", download_link=None)
+
     # Guardar CSV final
-    df_resultado.to_csv(TEMP_FILE, index=False)
+    try:
+        df_resultado.to_csv(TEMP_FILE, index=False)
+    except Exception as e:
+        tabla_original = df_original.to_html(classes="table table-striped", index=False)
+        tabla_imputada = df_resultado.to_html(classes="table table-striped", index=False)
+        return render_template("resultados.html",
+                               mensaje=f"Error al guardar el archivo: {str(e)}",
+                               tabla_original=tabla_original,
+                               tabla_imputada=tabla_imputada,
+                               arbol_info=arbol_info,
+                               tablas_extra=tablas_extra,
+                               download_link=None)
 
     tabla_original = df_original.to_html(classes="table table-striped", index=False)
     tabla_imputada = df_resultado.to_html(classes="table table-striped", index=False)
@@ -296,12 +432,20 @@ def procesar():
                            tabla_original=tabla_original,
                            tabla_imputada=tabla_imputada,
                            arbol_info=arbol_info,
+                           tablas_extra=tablas_extra,
                            download_link="/descargar")
 
 
 @app.route("/descargar")
 def descargar():
-    return send_file(TEMP_FILE, as_attachment=True)
+    # Validar que el archivo existe
+    if not os.path.exists(TEMP_FILE):
+        return "Archivo no encontrado. Por favor, procese los datos primero.", 404
+    
+    try:
+        return send_file(TEMP_FILE, as_attachment=True)
+    except Exception as e:
+        return f"Error al descargar el archivo: {str(e)}", 500
 
 if __name__ == "__main__":
     app.run()
