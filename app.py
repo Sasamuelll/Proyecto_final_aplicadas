@@ -218,6 +218,7 @@ def index():
 def procesar():
     file = request.files["archivo"]
     accion = request.form["accion"]
+
     df_original = leer_archivo(file)
     if df_original is None:
         return render_template("resultados.html",
@@ -226,24 +227,67 @@ def procesar():
 
     arbol_info = None
 
-    if accion == "imputacion":
+    # ================================
+    # PROCESAMIENTO COMPLETO "TODO"
+    # ================================
+    if accion == "todo":
+        mensaje = "Procesamiento completo realizado."
+
+        # 1. Imputación
+        df_imputado = imputacion_inteligente(df_original.copy())
+
+        # 2. Normalización
+        df_normalizado = normalizaciones_generales(df_imputado.copy())
+
+        # 3. Discretización
+        df_discreto = discretizacion(df_normalizado.copy(), metodo="equal_width", bins=5)
+
+        # 4. Árbol de decisión
+        _, acc, report, tree_rules = arbol_decision_general(df_original.copy())
+
+        arbol_info = {
+            "report": report,
+            "rules": tree_rules,
+            "accuracy": acc
+        }
+
+        # Mandar TODAS las tablas al HTML
+        tablas_extra = {
+            "imputado": df_imputado.to_html(classes="table table-striped", index=False),
+            "normalizado": df_normalizado.to_html(classes="table table-striped", index=False),
+            "discreto": df_discreto.to_html(classes="table table-striped", index=False)
+        }
+
+        df_resultado = df_discreto.copy()
+
+
+    # ================================
+    # ACCIONES INDIVIDUALES
+    # ================================
+    elif accion == "imputacion":
         df_resultado = imputacion_inteligente(df_original.copy())
         mensaje = "Imputación realizada correctamente."
+
     elif accion == "normalizacion":
         df_resultado = normalizaciones_generales(df_original.copy())
         mensaje = "Normalización aplicada correctamente."
+
     elif accion == "discretizacion":
         df_resultado = discretizacion(df_original.copy(), metodo="equal_width", bins=5)
         mensaje = "Discretización realizada correctamente."
+
     elif accion == "arbol":
         df_resultado, acc, report, tree_rules = arbol_decision_general(df_original.copy())
         mensaje = f"Árbol entrenado correctamente. Accuracy: {acc:.2f}"
         arbol_info = {"report": report, "rules": tree_rules}
+
     else:
         df_resultado = df_original.copy()
         mensaje = "Acción inválida."
 
+    # Guardar CSV final
     df_resultado.to_csv(TEMP_FILE, index=False)
+
     tabla_original = df_original.to_html(classes="table table-striped", index=False)
     tabla_imputada = df_resultado.to_html(classes="table table-striped", index=False)
 
@@ -253,6 +297,7 @@ def procesar():
                            tabla_imputada=tabla_imputada,
                            arbol_info=arbol_info,
                            download_link="/descargar")
+
 
 @app.route("/descargar")
 def descargar():
