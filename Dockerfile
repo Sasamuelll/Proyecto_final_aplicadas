@@ -3,7 +3,6 @@ FROM python:3.11-slim
 
 # Instala las dependencias de sistema necesarias para scikit-learn
 RUN apt-get update -y && \
-    # CAMBIO AQUÍ: libopenblas-dev en lugar de libatlas-base-dev
     apt-get install -y build-essential libopenblas-dev gfortran && \
     rm -rf /var/lib/apt/lists/*
 
@@ -12,10 +11,12 @@ WORKDIR /usr/src/app
 
 # Copia e instala las dependencias de Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# ⚠️ CAMBIO: Usamos -v para verbose (más información en el log) para diagnosticar el fallo de pip.
+RUN pip install -v --no-cache-dir --disable-pip-version-check -r requirements.txt
 
 # Copia el resto de tu aplicación
 COPY . .
 
-# Comando para iniciar el servidor Gunicorn
+# 🚨 CORRECCIÓN: Comando para iniciar el servidor Gunicorn apuntando a app.py
 CMD ["gunicorn", "app:app"]
