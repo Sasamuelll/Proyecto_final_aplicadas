@@ -3,7 +3,8 @@ FROM python:3.11-slim
 
 # Instala las dependencias de sistema necesarias para scikit-learn
 RUN apt-get update -y && \
-    apt-get install -y build-essential libatlas-base-dev gfortran && \
+    # CAMBIO AQUÍ: libopenblas-dev en lugar de libatlas-base-dev
+    apt-get install -y build-essential libopenblas-dev gfortran && \
     rm -rf /var/lib/apt/lists/*
 
 # Establece el directorio de trabajo
@@ -17,5 +18,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Comando para iniciar el servidor Gunicorn
-CMD ["gunicorn", "tu_archivo_app:app"] 
-# ⚠️ CAMBIA 'tu_archivo_app:app' por el nombre de tu archivo principal y la variable de Flask.
+CMD ["gunicorn", "app:app"]
